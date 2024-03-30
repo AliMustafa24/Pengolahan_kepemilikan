@@ -1,0 +1,728 @@
+---
+title: "Ownership"
+author: "Lina - Ali - Seksi AH SBSN"
+date: "2023-04-15"
+---
+## Dev db
+```{r setup, include=FALSE} 
+#develop DB
+############
+## Library #
+############
+library(readxl) # karena csv valuesnya berubah - kita pake excel nya - package ini lebih mudah
+library(openxlsx) # tuk print dalam bentu xlsx 
+library(tidyr) # untuk pivot dan filter
+library(dplyr) # tuk sort data
+library(stringr) #to remove leading and trailing whitespace (including spaces, tabs, and newlines)
+library(reshape2) #tuk pivot per seri
+library(tibble)
+############
+
+## clean env. and set working directory
+rm(list=ls()) #clear the environment
+
+#input<-"C:/Users/andy.mustafa/OneDrive - Kemenkeu/Master Update Sie.2/2024/OWNERSHIP/01_januari/20240102/input"
+#input<-"C:/Users/bloomberg/OneDrive - Kemenkeu/Master Update Sie.2/2024/OWNERSHIP/03_maret/20240314/input"
+input<-"C:/Users/fatchul.lailin/OneDrive - Kemenkeu/Master Update Sie.2/2024/OWNERSHIP/03_maret/20240327/input"
+#input<-"C:/Users/elva.novitasari/OneDrive - Kemenkeu/Master Update Sie.2/2024/OWNERSHIP/03_maret/20240308/input"
+#input<-"C:/Users/DJPPR/OneDrive - Kemenkeu/Master Update Sie.2/2023/R_Kepemilikan/07. November/20231108/input"
+
+#output<-"C:/Users/andy.mustafa/OneDrive - Kemenkeu/Master Update Sie.2/2024/OWNERSHIP/01_januari/20240102/output"
+#output<-"C:/Users/bloomberg/OneDrive - Kemenkeu/Master Update Sie.2/2024/OWNERSHIP/03_maret/20240314/output"
+output<-"C:/Users/fatchul.lailin/OneDrive - Kemenkeu/Master Update Sie.2/2024/OWNERSHIP/03_maret/20240327/output"
+#output<-"C:/Users/elva.novitasari/OneDrive - Kemenkeu/Master Update Sie.2/2024/OWNERSHIP/03_maret/20240308/output"
+#output<-"C:/Users/DJPPR/OneDrive - Kemenkeu/Master Update Sie.2/2023/R_Kepemilikan/07. November/20231108/output"
+
+#setseries<-"C:/Users/andy.mustafa/OneDrive - Kemenkeu/Master Update Sie.2/2024/Daftar_Seri_Update"
+#setseries<-"C:/Users/bloomberg/OneDrive - Kemenkeu/Master Update Sie.2/2024/Daftar_Seri_Update"
+setseries<-"C:/Users/fatchul.lailin/OneDrive - Kemenkeu/Master Update Sie.2/2024/Daftar_Seri_Update"
+#setseries<-"C:/Users/elva.novitasari/OneDrive - Kemenkeu/Master Update Sie.2/2024/Daftar_Seri_Update"
+#sesuaikan nama folder daftar seri yang update
+
+
+## set date - sesuai tanggal data
+current_date <- "2024-03-27" #digunakan tuk menandai output files dan menghitung yearfrac tuk kelompok per tenor
+
+
+setwd(input)
+
+###################################################################################
+# impor data 
+## note: impor menggunakan data yang sudah di vlook-up dulu di excel
+DB_Own_update <- read_excel("01_BIS4_for_Update_original.xlsx") #data dari SI BISSSS - hari terakhir based 
+#DB_series<-read_excel("02_Daftar_Seri.xlsx")
+last_nom<-read_excel("02_last_nominal.xlsx")
+###################################################################################
+
+# impor data series
+setwd(setseries)
+DB_series<-read_excel("Daftar_Seri_Update_2024.xlsx")
+#SBSN_series<-DB_series %>% 
+  #filter(tradable_non == "Tradable", Curr == "IDR", SUN_SBSN %in% c("SBSN")) #pilih yg tradable saja dan currency nya IDR
+#SBSN_series<-SBSN_series$Seri
+
+###################################################################################
+
+# adjust data base
+## remove spasi di belakang karakter investor
+DB_Own_update$TANGGAL<-as.Date(DB_Own_update$TANGGAL) # adjust format to date
+DB_Own_update$NAMA_PESERTA<-str_trim(DB_Own_update$NAMA_PESERTA) #tuk ngilangin spasi di belakang investor
+DB_series$Maturity <- as.Date(DB_series$Maturity) # adjust format to date
+
+###################
+## SBSN Tradable ##
+###################
+## pilih2 yg SBSN dan tradable
+SBSN_series<-DB_series %>% 
+  filter(tradable_non == "Tradable", Curr == "IDR", SUN_SBSN %in% c("SBSN")) #pilih yg tradable saja dan currency nya IDR
+series<-SBSN_series$Seri #tuk bentuk list seri2 SBSN --> tuk milih seri2 SBSN
+sbsn_rows<-which(DB_Own_update$SERI %in% series) #nyari row2 mana saja yg terdapat seri2 SBSN
+DB_own_sbsn<-DB_Own_update[sbsn_rows,] #cleaning seri2 non SBSN
+
+## remove status rekening yg PI dan CI --> kata BI ini akun mirroring aja, jd bisa bikin double count
+stat_rek<-c("PI","CI")
+pi_ci_rows<-which(DB_own_sbsn$STATUS_REKENING %in% stat_rek) #nyari row2 mana saja yg terdapat status rekeningnya PI dan CI
+if(length(pi_ci_rows) > 0) {
+  DB_own_sbsn <- DB_own_sbsn[-pi_ci_rows, ]
+} #menghilangkan pi dan ci, tp pake if, krn klo value nya 0, ini akan menghilangkan seluruh rows, jadi pake kondisi, klo pi_ci nya lebih dari 0 baru ni code dijalankan
+
+# comparing with prev. nominal
+last_value<-tail(last_nom[["last_trad"]],n=1) #take last nominal yg tradable tuk pembanding
+curr_value<-sum(DB_own_sbsn$NOMINAL)/1000000000 #take current value yg diolah saat ini
+control_today<-round(curr_value-last_value,9) #cari selisih dengan data kemarin --> rounding 9 digit
+
+print(control_today) #normalnya tdk ada selisih (value:0), tp klo ada selisih cari tau apakah ada yg jatuh tempo atau setelmen penerbitan seri baru 
+
+#$write.xlsx(DB_own_sbsn,"DB_sbsn.xlsx")
+
+```
+
+#Trad
+```{r data processing}
+
+setwd(output)
+
+###################################################
+# develop dataframe baru tuk diolah lebih lanjut ##
+###################################################
+
+DB_pivot_rekap <- DB_own_sbsn[, c("Rekap_Non_Rekap", "TIPE_INVESTOR", "NOMINAL","SERI","CUSTODY_CODE")] # Select only required columns
+
+###################################################
+# Bank rekap/non rekap #
+###################################################
+
+# select non SUB-REGISTRY
+sub_reg<-c("SUB-REGISTRY")
+sub_reg_rows<-which(DB_own_sbsn$Rekap_Non_Rekap %in% sub_reg) #nyari row2 mana saja yg subreg
+DB_non_subreg<-DB_own_sbsn[-sub_reg_rows,] #select non-subreg
+
+# Aggregate the data by Rekap/non Rekap
+rekap_non <- aggregate(NOMINAL ~ Rekap_Non_Rekap + SERI,
+                       data = DB_non_subreg,
+                       FUN = function(x) c(sum = sum(x), count = length(x)))
+colnames(rekap_non)[3] <- "Nominal_sum"
+rekap_non$Nominal_sum <- rekap_non$Nominal_sum[, "sum"] #adjust nominal_sum menjadi 1 dimensi saja
+
+# Pivot the table to get the sum for each SERI as columns
+rekap_non_pivot <- dcast(rekap_non,
+                         Rekap_Non_Rekap ~ SERI,
+                         value.var = "Nominal_sum")
+
+#write.xlsx(rekap_non_pivot,"rekap_non_pivot.xlsx") # tuk sementara - buat kontrol outputnya
+
+colnames(rekap_non_pivot)[1] <- "inv_type" # nama kolomnya disamakan dengan yg Subreg db biar bisa di-merge
+
+
+###################################################
+## subregistry - tuk dapat rincian CN dan CR nya ##
+###################################################
+
+# select sub-registry type
+DB_subreg<-DB_own_sbsn[sub_reg_rows,] #select non-subreg
+
+##############################
+# select sub-registry --> CN
+##############################
+
+sub_reg_cn<-c("CN")
+sub_reg_cn_rows<-which(DB_subreg$CUSTODY_CODE %in% sub_reg_cn) #nyari row2 mana saja yg CN
+DB_subreg_cn<-DB_subreg[sub_reg_cn_rows,] #select cn
+
+#write.xlsx(DB_subreg_cn,"asing_awal.xlsx")
+
+# pivot tuk CN - asing
+inv_type_cn <- aggregate(NOMINAL ~ TIPE_INVESTOR + SERI,
+                       data = DB_subreg_cn,
+                       FUN = function(x) c(sum = sum(x), count = length(x)))
+colnames(inv_type_cn)[3] <- "Nominal_sum"
+inv_type_cn$Nominal_sum <- inv_type_cn$Nominal_sum[, "sum"] #adjust nominal_sum menjadi 1 dimensi saja
+
+# Pivot the table to get the sum for each SERI as columns
+inv_type_pivot_cn <- dcast(inv_type_cn,
+                         TIPE_INVESTOR ~ SERI,
+                         value.var = "Nominal_sum")
+
+colnames(inv_type_pivot_cn)[1] <- "inv_type" # nama kolomnya disamakan dengan yg Subreg db biar bisa di-merge
+
+inv_type_pivot_cn <- inv_type_pivot_cn %>% 
+  mutate(inv_type = paste0("CN_", inv_type)) %>%  # nambahi nama CN_ di depan, in case ke depannya mau digabung rincian CN nya
+  filter(str_starts(inv_type, "CN_")) # hilangkan original rows yg blm dikasih nama
+
+inv_type_pivot_cn<- rbind(inv_type_pivot_cn, c("Total", colSums(inv_type_pivot_cn[,-1], na.rm = TRUE)))  # Add row for column sums --> langsung ini aja yg digabung dengan file lain
+#write.xlsx(inv_type_pivot_cn,"inv_type_pivot_cn.xlsx") # tuk sementara - buat kontrol outputnya
+
+cn_merge <- inv_type_pivot_cn %>% 
+  filter(grepl("Total", inv_type)) #pilih row total tuk digabung dengan file rekap dan domestic
+
+cn_merge <- cn_merge %>% 
+  mutate(inv_type = ifelse(inv_type == "Total", "Asing", paste0("CN_", inv_type))) #ganti total jadi asing
+
+cn_merge[, -1] <- sapply(cn_merge[, -1], function(x) as.numeric(as.character(x))) # Convert character columns back to nu
+
+#write.xlsx(cn_merge,"asing.xlsx")
+
+##############################################
+# select sub-registry --> non-CN --> resident
+##############################################
+DB_subreg_dom<-DB_subreg[-sub_reg_cn_rows,] #select non-cn
+
+# pivot tuk CN - asing
+inv_type_dom <- aggregate(NOMINAL ~ TIPE_INVESTOR + SERI,
+                       data = DB_subreg_dom,
+                       FUN = function(x) c(sum = sum(x), count = length(x)))
+colnames(inv_type_dom)[3] <- "Nominal_sum"
+inv_type_dom$Nominal_sum <- inv_type_dom$Nominal_sum[, "sum"] #adjust nominal_sum menjadi 1 dimensi saja
+
+# Pivot the table to get the sum for each SERI as columns
+inv_type_pivot_dom <- dcast(inv_type_dom,
+                         TIPE_INVESTOR ~ SERI,
+                         value.var = "Nominal_sum")
+
+colnames(inv_type_pivot_dom)[1] <- "inv_type" # nama kolomnya disamakan dengan yg Subreg db biar bisa di-merge
+
+#write.xlsx(inv_type_pivot_dom,"inv_type_pivot_dom.xlsx") # tuk sementara - buat kontrol outputnya
+
+
+########################################
+# gabung 3 files bank - asing - domestik
+########################################
+
+DataSBSNseri_1 <- merge(rekap_non_pivot, cn_merge, by = intersect(colnames(rekap_non_pivot), colnames(cn_merge)), all = TRUE) # "intersect" function tdk bisa merge tuk 3 file langsung, jadi dua dua dulu baru digabung
+DataSBSNseri <- merge(DataSBSNseri_1, inv_type_pivot_dom, by = intersect(colnames(DataSBSNseri_1), colnames(inv_type_pivot_dom)), all = TRUE) # "intersect" function tdk bisa merge tuk 3 file langsung, jadi dua dua dulu baru digabung
+
+##############################
+# rename nama bank rekap dkk
+##############################
+DataSBSNseri$inv_type <- ifelse(DataSBSNseri$inv_type == "Bank BUMN Rekap", "Bank Pemerintah",
+                       ifelse(DataSBSNseri$inv_type == "Bank Swasta Rekap", "Bank Swasta Nasional", 
+                       ifelse(DataSBSNseri$inv_type == "Bank Non Rekap", "Bank Asing",
+                              ifelse(DataSBSNseri$inv_type == "BPD Rekap", "BPD", DataSBSNseri$inv_type))))
+
+## outputnya file "ownerhsip_v2.2"
+#write.xlsx(DataSBSNseri,"DataSBSNseri.xlsx") # tuk sementara - buat kontrol outputnya
+## next, coba cek file ini
+######################################
+# nambah kategori Bank Konvensional
+######################################
+
+# bikin data frame bank konven --> baru sehabis itu digabung dengan yg lain
+bank_konven<-c("Bank Pemerintah", "Bank Swasta Nasional","Bank Asing","BPD") #define rows' name yg masuk kategori bank konvensional
+bank_konven_rows<-which(DataSBSNseri$inv_type %in% bank_konven) #nyari row2 mana saja yg Bank Konven
+DB_bank_konven<-DataSBSNseri[bank_konven_rows,] #select yg bank konven sama syariah saja
+DB_bank_konven[, -1] <- sapply(DB_bank_konven[, -1], function(x) as.numeric(as.character(x))) # Convert character columns back to numeric
+total_bank_konven<- rbind(DB_bank_konven, c("BANK KONVENSIONAL", colSums(DB_bank_konven[,-1], na.rm = TRUE)))  # Add row for column sums --> tuk total bank konvensional
+total_bank_konven[, -1] <- sapply(total_bank_konven[, -1], function(x) as.numeric(as.character(x))) # Convert character columns back to numeric
+total_bank_konven<-total_bank_konven[5,] # select only total bank's row
+
+# gabung bank konven dengan DataSBSNseri
+SBSN_bank_konven <- merge(DataSBSNseri, total_bank_konven, by = intersect(colnames(DataSBSNseri), colnames(total_bank_konven)), all = TRUE) # gabung bank konven dengan DataSBSNseri
+
+#write.xlsx(SBSN_bank_konven,"Bank-konven.xlsx")
+
+######################
+# nambah total Bank ##
+######################
+
+# bikin new DF --> hanya bank konven dan syariah rows --> jumlah --> gabung dengan posisi SBSN_per seri
+banks<-c("BANK KONVENSIONAL","BANK SYARIAH") #define rows' name yg mau digabung
+bank_rows<-which(SBSN_bank_konven$inv_type %in% banks) #nyari row2 mana saja yg Bank Konven dan Bank Syariah
+DB_banks<-SBSN_bank_konven[bank_rows,] #select yg bank konven sama syariah saja
+DB_banks[, -1] <- sapply(DB_banks[, -1], function(x) as.numeric(as.character(x))) # Convert character columns back to numeric
+total_bank<- rbind(DB_banks, c("Total Bank", colSums(DB_banks[,-1], na.rm = TRUE)))  # Add row for column sums --> tuk total bank
+total_bank[, -1] <- sapply(total_bank[, -1], function(x) as.numeric(as.character(x))) # Convert character columns back to numeric
+total_bank<-total_bank[3,] # select only total bank's row
+
+######################
+# nambah lain-lain ##
+######################
+
+# bikin new DF --> hanya untuk yg masuk dalam kategori lain2
+lain2<-c("KORPORASI","LEMBAGA KEUANGAN","SEKURITAS","YAYASAN","LAINNYA") #define rows' name yg masuk kategori lain2
+lain2_rows<-which(SBSN_bank_konven$inv_type %in% lain2) #nyari row2 mana saja yg masuk kategori lain2
+DB_lain2<-SBSN_bank_konven[lain2_rows,] #select yg lain2
+DB_lain2[, -1] <- sapply(DB_lain2[, -1], function(x) as.numeric(as.character(x))) # Convert character columns back to numeric
+total_lain2<- rbind(DB_lain2, c("Lain-lain", colSums(DB_lain2[,-1], na.rm = TRUE)))  # Add row for column sums --> tuk lain2
+total_lain2[, -1] <- sapply(total_lain2[, -1], function(x) as.numeric(as.character(x))) # Convert character columns back to numeric
+total_lain2<-total_lain2[6,] # select only total bank's row
+
+
+###############################################################################
+# Gabung total bank, total lain2 dengan SBSN_bank_konven (semua investor) ##
+###############################################################################
+
+posisi_SBSN_perseri_1 <- merge(SBSN_bank_konven, total_bank, by = intersect(colnames(SBSN_bank_konven), colnames(total_bank)), all = TRUE) # gabung SBSN_konven dan total_bank
+
+posisi_SBSN_perseri_2 <- merge(posisi_SBSN_perseri_1, total_lain2, by = intersect(colnames(posisi_SBSN_perseri_1), colnames(total_lain2)), all = TRUE) # gabung total lain2 dengan yg lain
+
+lain2_posisi_rows<-which(posisi_SBSN_perseri_2$inv_type %in% lain2) #nyari row2 mana saja yg masuk kategori lain2 di posisi_SBSN_perseri
+posisi_SBSN_perseri<-posisi_SBSN_perseri_2[-lain2_posisi_rows,] #hilangkan yg masuk kategori lain2
+posisi_SBSN_perseri[, -1] <- sapply(posisi_SBSN_perseri[, -1], function(x) as.numeric(as.character(x))) # Convert character columns back to numeric
+
+posisi_SBSN_perseri <- posisi_SBSN_perseri %>% 
+  mutate(total = rowSums(select(., -inv_type),na.rm=TRUE)) # tuk nambah 1 kolom terakhir -> total tiap row
+
+##########################################
+# Produce output 1 posisi SBSN per seri ##
+##########################################
+
+#re-arrange rows' order based on posisi yg sudah ada sekarang
+rownames(posisi_SBSN_perseri) <- posisi_SBSN_perseri$inv_type
+
+#urutin sesuai dengan kehendak kita
+row_names_order <- c("Total Bank", "BANK KONVENSIONAL","BANK SYARIAH", "BANK INDONESIA", "ASURANSI","DANA PENSIUN","PERORANGAN","REKSADANA","Asing","Lain-lain")
+
+# reorder rows based on row names order
+posisi_SBSN_perseri <- posisi_SBSN_perseri[row_names_order,]
+
+# Add row names as a new column
+posisi_SBSN_perseri <- rownames_to_column(posisi_SBSN_perseri, var = "Institusi")
+posisi_SBSN_perseri <- posisi_SBSN_perseri[,-2] #menghilangkan kolom inv_type karena dobel sama institusi
+posisi_SBSN_perseri <- posisi_SBSN_perseri %>% mutate_at(vars(-Institusi),~./1000000000) #jadikan dalam miliar Rupiah
+
+#########################################################################################################
+# output 1 -- posisi SBSN per seri dalam miliar Rupiah
+write.xlsx(posisi_SBSN_perseri,paste0("01_posisi_SBSN_perseri_InvGroup_",current_date,".xlsx")) # output 1 --> posisi SBSN per seri yg tradable
+#########################################################################################################
+
+# comparing with prev. nominal
+last_value<-tail(last_nom[["last_trad"]],n=1) #take last nominal yg tradable tuk pembanding
+total_posisi_perseri<-posisi_SBSN_perseri[,c("Institusi","total")]
+#write.xlsx(total_posisi_perseri,"total_posisiper_seri.xlsx")
+total_bank<-total_posisi_perseri[1,"total"] #ambil posisi total bank - avoiding double count
+curr_posisi_perseri<-sum(total_posisi_perseri$total) #take current value yg diolah saat ini
+curr_posisi_perseri<-curr_posisi_perseri-total_bank #dikurangkan dengan total bank tuk menghindari double counting krn dirumusnya termasuk ke sum di atas
+control_today_posisiperSeri<-round(curr_posisi_perseri-last_value,9) #cari selisih dengan data kemarin
+print(control_today_posisiperSeri) #normalnya tdk ada selisih (value:0), tp klo ada selisih cari tau apakah ada yg jatuh tempo atau setelmen penerbitan seri baru 
+
+#write.xlsx(total_posisi_perseri,"total_posisi_perseri.xlsx")
+
+## next --> compare totalnya dengan prev. value dan output yg dikerjakan manual dengan excel 
+## alhamdulillah, perbedaan sudah 0 in total, tp terdapat perbedaan di hampir semua per kelompok yg non bank 
+
+############################################
+# Produce output 2 per kelompok seri SBSN ##
+############################################
+
+## bikin df per kelompok seri
+# pilih berdasar nama seri
+db_ifr <- posisi_SBSN_perseri[, c(1, grep("IFR", colnames(posisi_SBSN_perseri)))]
+db_pbs <- posisi_SBSN_perseri[, c(1, grep("PBS", colnames(posisi_SBSN_perseri)))]
+db_spns <- posisi_SBSN_perseri[, c(1, grep("SPNS", colnames(posisi_SBSN_perseri)))]
+db_sr <- posisi_SBSN_perseri[, c(1, grep("SR", colnames(posisi_SBSN_perseri)))]
+db_frs <- posisi_SBSN_perseri[, c(1, grep("FRS", colnames(posisi_SBSN_perseri)))]
+
+# tuk nambah 1 kolom terakhir -> total tiap row
+db_ifr <- db_ifr %>% mutate(total_ifr = rowSums(select(., -Institusi),na.rm=TRUE)) 
+db_pbs <- db_pbs %>% mutate(total_pbs = rowSums(select(., -Institusi),na.rm=TRUE))
+db_spns <- db_spns %>% mutate(total_spns = rowSums(select(., -Institusi),na.rm=TRUE))
+db_sr <- db_sr %>% mutate(total_sr = rowSums(select(., -Institusi),na.rm=TRUE))
+db_frs <- db_frs %>% mutate(total_frs = rowSums(select(., -Institusi),na.rm=TRUE))
+
+# pilih kolom total saja
+total_ifr <- db_ifr[, c(1, grep("total", colnames(db_ifr)))]
+total_pbs <- db_pbs[, c(1, grep("total", colnames(db_pbs)))]
+total_spns <- db_spns[, c(1, grep("total", colnames(db_spns)))]
+total_sr <- db_sr[, c(1, grep("total", colnames(db_sr)))]
+total_frs <- db_frs[, c(1, grep("total", colnames(db_frs)))]
+
+# combine seluruh kolom dengan kolom 1 sebagai acuan
+total_group_seri <- cbind(total_ifr, total_pbs[, 2], total_spns[, 2],total_sr[, 2],total_frs[, 2])
+colnames(total_group_seri) <- c("Institusi", "total_ifr", "total_pbs","total_spns","total_sr","total_frs")
+total_group_seri <- total_group_seri %>% 
+  mutate(total = rowSums(select(., -Institusi),na.rm=TRUE)) # tuk nambah 1 kolom terakhir -> total tiap row
+total_group_seri <- total_group_seri %>% mutate_at(vars(-Institusi),~.) #jadikan dalam miliar Rupiah
+
+
+###########################################################################################
+# print output 02 -- jumlah per seri
+write.xlsx(total_group_seri,paste0("02_total_group_seri_",current_date,".xlsx")) # output 2 
+###########################################################################################
+
+# comparing with prev. nominal --> tuk kontrol
+last_value<-tail(last_nom[["last_trad"]],n=1) #take last nominal yg tradable tuk pembanding
+total_group_seri_last <-total_group_seri[,c("Institusi","total")]
+total_bank_grup_seri<-total_group_seri[1,"total"] #ambil posisi total bank - avoiding double count
+curr_posisi_grup_seri<-sum(total_group_seri_last$total) #take current value yg diolah saat ini
+curr_posisi_grup_seri<-curr_posisi_grup_seri-total_bank_grup_seri #dikurangkan dengan total bank tuk menghindari double counting krn dirumusnya termasuk ke sum di atas
+control_today_posisi_grup_Seri<-round(curr_posisi_grup_seri-last_value,9) #cari selisih dengan data kemarin, rounding 9 digit
+print(control_today_posisi_grup_Seri) #normalnya tdk ada selisih (value:0), tp klo ada selisih cari tau apakah ada yg jatuh tempo atau setelmen penerbitan seri baru 
+
+##########################
+## solusi versi singkat ## smentara g dipake dulu, takut membingungkan
+##########################
+## Select columns for each series
+#series_cols <- c("IFR", "PBS", "SPNS", "SR")
+#series_dbs <- lapply(series_cols, function(col) posisi_SBSN_perseri[, c(1, grep(col, #colnames(posisi_SBSN_perseri)))])
+#series_totals <- lapply(series_dbs, function(db) {
+#  total_col <- paste0("total_", tolower(substr(colnames(db)[2], 1, 3)))
+#  db[, total_col] <- rowSums(select(db, -Institusi))
+#  db[, c("Institusi", total_col)]
+#})
+
+## Combine all series into one data frame
+#total_group_seri <- Reduce(function(x, y) merge(x, y, by = "Institusi", all = TRUE), series_totals)
+#colnames(total_group_seri)[-1] <- paste0("total_", series_cols)
+
+# Print output 02 -- jumlah per seri
+#write.xlsx(total_group_seri, "02_total_group_seri.xlsx") # output 2 
+
+
+############################################
+# Produce output 3 per kelompok tenor SBSN ##
+############################################
+
+########################
+# modified data series
+## Calculate the year fraction
+SBSN_series$TTM <- round(as.numeric(difftime(SBSN_series$Maturity, current_date, units = "days")) / 365, 2) # add 1 column - TTM
+SBSN_series$tenor <- ifelse(SBSN_series$TTM <= 1, "A",
+                  ifelse(SBSN_series$TTM <= 2, "B",
+                    ifelse(SBSN_series$TTM <= 5, "C",
+                      ifelse(SBSN_series$TTM <= 10, "D", "E")
+                    )
+                  )
+                ) ## put additional column for tenor group
+
+#######################################################################
+# combine --> data grup seri based on tenor ke data posisi_SBSN_perseri
+## sesuaikan format DB_series
+DB_series_tenor<-SBSN_series[,c("Seri","tenor")] # create a new dataframe tuk dijadikan data merge, ngambil dari data SBSN series (tradable dan SBSN) --> udah di define di awal
+DB_series_tenor <- DB_series_tenor[complete.cases(DB_series_tenor), ] # exclude NA values
+DB_series_tenor<-t(DB_series_tenor) # transpose data DB_series_tenor biar bisa di gabung ke data posisi SBSN per seri
+colnames(DB_series_tenor) <- as.character(DB_series_tenor[1,]) #Set the first row values as column names
+DB_series_tenor <- as.data.frame(DB_series_tenor) # jadiin formatnya ke data frame
+DB_series_tenor <- DB_series_tenor[-1,] # Remove the first row
+DB_series_tenor <- rownames_to_column(DB_series_tenor, var = "Institusi") # add rownames as a column --> nama kolomnya disamain dengan posisi SBSN per seri krn mau di merge walaupun isinya g sama
+
+merged_tenor_posisi <- merge(posisi_SBSN_perseri, DB_series_tenor, by.y = intersect(colnames(posisi_SBSN_perseri), colnames(DB_series_tenor)), all = TRUE) #gabung antara file posisi SBSN dengan DB_series tenor group
+merged_tenor_posisi[is.na(merged_tenor_posisi)] <- 0 #change NA values become 0
+#write.csv(merged_tenor_posisi,"merged_tenor.csv")
+
+##################################
+# nyari jumlah tiap kategori tenor
+
+### set the values in the first column as row names
+rownames(merged_tenor_posisi) <- merged_tenor_posisi[,1]
+
+## masing2 kita bikin data frame nya
+col_A <- grepl("A", merged_tenor_posisi["tenor",]) # Find the column indices that contain "A" in the "tenor" row
+subset_A <- merged_tenor_posisi[, col_A] # Subset the data frame using the selected column indices
+col_B <- grepl("B", merged_tenor_posisi["tenor",]) # Find the column indices that contain "B" in the "tenor" row
+subset_B <- merged_tenor_posisi[, col_B] # Subset the data frame using the selected column indices
+col_C <- grepl("C", merged_tenor_posisi["tenor",]) # Find the column indices that contain "C" in the "tenor" row
+subset_C <- merged_tenor_posisi[, col_C] # Subset the data frame using the selected column indices
+col_D <- grepl("D", merged_tenor_posisi["tenor",]) # Find the column indices that contain "D" in the "tenor" row
+subset_D <- merged_tenor_posisi[, col_D] # Subset the data frame using the selected column indices
+col_E <- grepl("E", merged_tenor_posisi["tenor",]) # Find the column indices that contain "E" in the "tenor" row
+subset_E <- merged_tenor_posisi[, col_E] # Subset the data frame using the selected column indices
+
+################################################
+# tuk nambah 1 kolom terakhir -> total tiap row
+## nanti lanjutkan dengan exclude row tenor
+
+subset_A_clean<-subset_A[-which(row.names(subset_A)=="tenor"),]
+subset_A_clean[,] <- sapply(subset_A_clean[,], function(x) as.numeric(as.character(x),na.rm=TRUE)) #Convert character all columns back to numeric
+subset_A_clean <- subset_A_clean %>% 
+  mutate("0-1 tahun" = rowSums(select(., everything()),na.rm=TRUE)) # milih semua kolom, jadi tidak pakai select function 
+subset_A_clean<-subset_A_clean %>% select(last_col()) # select last column and drop the other columns
+
+subset_B_clean<-subset_B[-which(row.names(subset_B)=="tenor"),]
+subset_B_clean[,] <- sapply(subset_B_clean[,], function(x) as.numeric(as.character(x),na.rm=TRUE)) #Convert character all columns back to numeric
+subset_B_clean <- subset_B_clean %>% 
+  mutate(">1-2 tahun" = rowSums(select(., everything()),na.rm=TRUE)) # milih semua kolom, jadi tidak pakai select function 
+subset_B_clean<-subset_B_clean %>% select(last_col()) # select last column and drop the other columns
+
+subset_C_clean<-subset_C[-which(row.names(subset_C)=="tenor"),]
+subset_C_clean[,] <- sapply(subset_C_clean[,], function(x) as.numeric(as.character(x),na.rm=TRUE)) #Convert character all columns back to numeric
+subset_C_clean <- subset_C_clean %>% 
+  mutate(">2-5 tahun" = rowSums(select(., everything()),na.rm=TRUE)) # milih semua kolom, jadi tidak pakai select function 
+subset_C_clean<-subset_C_clean %>% select(last_col()) # select last column and drop the other columns
+
+subset_D_clean<-subset_D[-which(row.names(subset_D)=="tenor"),]
+subset_D_clean[,] <- sapply(subset_D_clean[,], function(x) as.numeric(as.character(x),na.rm=TRUE)) #Convert character all columns back to numeric
+subset_D_clean <- subset_D_clean %>% 
+  mutate(">5-10 tahun" = rowSums(select(., everything()),na.rm=TRUE)) # milih semua kolom, jadi tidak pakai select function 
+subset_D_clean<-subset_D_clean %>% select(last_col()) # select last column and drop the other columns
+
+subset_E_clean<-subset_E[-which(row.names(subset_E)=="tenor"),]
+subset_E_clean[,] <- sapply(subset_E_clean[,], function(x) as.numeric(as.character(x),na.rm=TRUE)) #Convert character all columns back to numeric
+subset_E_clean <- subset_E_clean %>% 
+  mutate(">10 tahun" = rowSums(select(., everything()),na.rm=TRUE)) # milih semua kolom, jadi tidak pakai select function 
+subset_E_clean<-subset_E_clean %>% select(last_col()) # select last column and drop the other columns
+
+## gabung semua subset files
+SBSN_group_tenor <- cbind(subset_A_clean, subset_B_clean, subset_C_clean, subset_D_clean, subset_E_clean)
+SBSN_group_tenor <- SBSN_group_tenor %>%
+  mutate_all(~.) # jadikan dalam bentuk miliar rupiah
+
+row_names_order <- c("Total Bank", "BANK KONVENSIONAL","BANK SYARIAH", "BANK INDONESIA", "ASURANSI","DANA PENSIUN","PERORANGAN","REKSADANA","Asing","Lain-lain") #urutin sesuai dengan kehendak kita
+SBSN_group_tenor <- SBSN_group_tenor[row_names_order,]# reorder rows based on row names order
+SBSN_group_tenor <- rownames_to_column(SBSN_group_tenor, var = "Institusi") # Add row names as a new column
+
+SBSN_group_tenor <- SBSN_group_tenor %>% 
+  mutate(total = rowSums(select(., -Institusi),na.rm=TRUE)) # tuk nambah 1 kolom terakhir -> total tiap row
+
+##################################################################################
+#output3 - posisi per kelompok tenor (dalam miliar Rupiah)
+write.xlsx(SBSN_group_tenor, paste0("03. Own_group_tenor_",current_date,".xlsx"))
+##################################################################################
+
+# comparing with prev. nominal --> tuk kontrol
+last_value<-tail(last_nom[["last_trad"]],n=1) #take last nominal yg tradable tuk pembanding
+SBSN_group_tenor_last <- SBSN_group_tenor[,c("Institusi","total")]
+total_bank_grup_tenor<-SBSN_group_tenor_last[1,"total"] # ambil nilai total bank
+curr_SBSN_group_tenor<-sum(total_group_seri_last$total) #take current value yg diolah saat ini
+curr_SBSN_group_tenor<-curr_SBSN_group_tenor-total_bank_grup_tenor #dikurangkan dengan total bank tuk menghindari double counting krn dirumusnya termasuk ke sum di atas
+control_today_posisi_grup_tenor<-round(curr_SBSN_group_tenor-last_value, 9) #cari selisih dengan data kemarin - rounding 9 
+print(control_today_posisi_grup_tenor) #normalnya tdk ada selisih (value:0), tp klo ada selisih cari tau apakah ada yg jatuh tempo atau setelmen penerbitan seri baru 
+
+```
+
+## Non Trad
+```{r data processing}
+
+#######################
+## SBSN non-Tradable ##
+#######################
+SBSN_series_nontrad<-DB_series %>% 
+  filter(tradable_non == "Non Tradable", Curr == "IDR", SUN_SBSN %in% c("SBSN")) #pilih yg tradable saja dan currency nya IDR
+series_nontrad<-SBSN_series_nontrad$Seri #tuk bentuk list seri2 SBSN --> tuk milih seri2 SBSN
+sbsn_rows_nontrad<-which(DB_Own_update$SERI %in% series_nontrad) #nyari row2 mana saja yg terdapat seri2 SBSN
+DB_own_sbsn_nontrad<-DB_Own_update[sbsn_rows_nontrad,] #cleaning seri2 non SBSN
+
+## remove status rekening yg PI dan CI --> kata BI ini akun mirroring aja, jd bisa bikin double count
+stat_rek<-c("PI","CI")
+pi_ci_rows<-which(DB_own_sbsn_nontrad$STATUS_REKENING %in% stat_rek) #nyari row2 mana saja yg terdapat status rekeningnya PI dan CI
+if(length(pi_ci_rows) > 0) {
+  DB_own_sbsn_nontrad <- DB_own_sbsn_nontrad[-pi_ci_rows, ]
+} #menghilangkan pi dan ci, tp pake if, krn klo value nya 0, ini akan menghilangkan seluruh rows, jadi pake kondisi, klo pi_ci nya lebih dari 0 baru ni code dijalankan
+
+# comparing with prev. nominal - tuk kontrol apakah pilihan seri nya benar
+last_value_nontrad<-tail(last_nom[["last_nonTrad"]],n=1) #take last nominal yg tradable tuk pembanding
+curr_value_nontrad<-sum(DB_own_sbsn_nontrad$NOMINAL)/1000000000 #take current value yg diolah saat ini
+control_today_nontrad <- round(curr_value_nontrad - last_value_nontrad, 9)#cari selisih dengan data kemarin-rounding hingga 9 desimal di belakang koma (miliar)
+print(control_today_nontrad) #normalnya tdk ada selisih (value:0), tp klo ada selisih cari tau apakah ada yg jatuh tempo atau setelmen penerbitan seri baru 
+
+###########################################
+## olah data non tradable dan set output ##
+###########################################
+output<-output
+setwd(output)
+
+###################################################
+# develop dataframe baru tuk diolah lebih lanjut ##
+###################################################
+
+DB_pivot_rekap_nontrad <- DB_own_sbsn_nontrad[, c("Rekap_Non_Rekap", "TIPE_INVESTOR", "NOMINAL","SERI","CUSTODY_CODE")] # Select only required columns
+
+##############################################################################################
+## pada saat ini, seri2 nontradable SBSN hanya dimiliki oleh institusi Pemerintah, perorangan, dan Lain-lain. Ke depannya, apabila terdapat kepemilikan oleh perbankan maupun asing, maka coding tuk non tradable perlu disesuaikan.
+##############################################################################################
+
+
+############################################################
+# produce non tradable per seri --> pivot dari DB nontrad ##
+############################################################
+
+# pivot tuk data non trad
+inv_type_dom_nontrad <- aggregate(NOMINAL ~ TIPE_INVESTOR + SERI,
+                       data = DB_own_sbsn_nontrad, #sesuaikan data base tuk pivot nya di sini ya
+                       FUN = function(x) c(sum = sum(x), count = length(x)))
+## institusi Pemerintah belum keliatan
+## break di sini ya
+colnames(inv_type_dom_nontrad)[3] <- "Nominal_sum"
+inv_type_dom_nontrad$Nominal_sum <- inv_type_dom_nontrad$Nominal_sum[, "sum"] #adjust nominal_sum menjadi 1 dimensi saja
+
+################################################################
+## Khusus pemegang SDHI - di rename jadi Institusi Pemerintah ##
+################################################################
+# Find rows which contain "SDHI" in col1
+sdhi_rows<-which(substr(inv_type_dom_nontrad$SERI,1, 4) == "SDHI") # "1,4" --> berfungsi nyari karakter pertama sampai ke-4
+
+# change the values in sdhi_rows tipe_investor to "Institusi Pemerintah"
+inv_type_dom_nontrad[sdhi_rows, 1] <- "Institusi Pemerintah" # angka 1 menunjukan nomor kolom yg akan kita ubah
+
+#################################################
+## Pivot terus produce output tuk non tradable ##
+#################################################
+
+# Pivot the table to get the sum for each SERI as columns
+inv_type_pivot_dom_nontrad <- dcast(inv_type_dom_nontrad,
+                         TIPE_INVESTOR ~ SERI,
+                         value.var = "Nominal_sum")
+colnames(inv_type_pivot_dom_nontrad)[1] <- "inv_type" # nama kolomnya disamakan dengan yg Subreg db biar bisa di-merge
+
+##################################
+# nambah Lain-lain non tradable ##
+##################################
+
+# bikin new DF --> hanya untuk yg masuk dalam kategori lain2
+lain2<-c("KORPORASI","LEMBAGA KEUANGAN","SEKURITAS","YAYASAN","LAINNYA") #define rows' name yg masuk kategori lain2
+lain2_rows<-which(inv_type_pivot_dom_nontrad$inv_type %in% lain2) #nyari row2 mana saja yg masuk kategori lain2
+DB_lain2_nontrad<-inv_type_pivot_dom_nontrad[lain2_rows,] #select yg lain2
+total_lain2_nontrad<- rbind(DB_lain2_nontrad, c("Lain-lain", colSums(DB_lain2_nontrad[,-1], na.rm = TRUE)))  # Add row for column sums --> tuk lain2
+total_lain2_nontrad[, -1] <- sapply(total_lain2_nontrad[, -1], function(x) as.numeric(as.character(x))) # Convert character columns back to numeric
+total_lain2_nontrad <- total_lain2_nontrad[grepl("Lain-lain", total_lain2_nontrad$inv_type),] # select only Lain-lain
+
+##################################################
+# Gabung Lain-lain dengan investor non tradable ##
+##################################################
+
+posisi_SBSN_nontrad <- merge(inv_type_pivot_dom_nontrad, total_lain2_nontrad, by = intersect(colnames(inv_type_pivot_dom_nontrad), colnames(total_lain2_nontrad)), all = TRUE) # gabung SBSN_nontrad dan Lain-lain
+lain_nontrad<-c("KORPORASI","LEMBAGA KEUANGAN","SEKURITAS","YAYASAN","LAINNYA") #define rows' name yg masuk kategori lain2
+lain2_rows_nontrad<-which(posisi_SBSN_nontrad$inv_type %in% lain_nontrad) #nyari row2 mana saja yg masuk kateri lain2 di df ini
+posisi_SBSN_nontrad<-posisi_SBSN_nontrad[-lain2_rows_nontrad,] #clean data
+
+#urutin sesuai dengan kehendak kita
+
+#jadiin column 1 jadi roname
+rownames(posisi_SBSN_nontrad) <- posisi_SBSN_nontrad$inv_type
+
+#urutin sesuai dengan kehendak kita
+row_names_order_nontrad <- c("Institusi Pemerintah", "PERORANGAN","Lain-lain") 
+
+# reorder rows based on row names order
+posisi_SBSN_nontrad <- posisi_SBSN_nontrad[row_names_order_nontrad,]
+
+# Add row names as a new column
+posisi_SBSN_nontrad <- rownames_to_column(posisi_SBSN_nontrad, var = "Institusi")
+posisi_SBSN_nontrad<-posisi_SBSN_nontrad[,-2]#menghilangkan kolom inv type yg ke dobel sama institusi
+posisi_SBSN_nontrad <- posisi_SBSN_nontrad %>% 
+  mutate(total = rowSums(select(., -Institusi),na.rm=TRUE)) # tuk nambah 1 kolom terakhir -> total tiap row
+posisi_SBSN_nontrad <- posisi_SBSN_nontrad %>%
+  mutate(total = total/1e+09)
+
+#########################################################################################################
+# output 4 --> posisi SBSN non tradable
+write.xlsx(posisi_SBSN_nontrad,paste0("04. posisi_SBSN_nontrad_",current_date,".xlsx")) # output terakhir
+#########################################################################################################
+
+##########################################################
+# Produce output 5 per kelompok tenor SBSN non tradable ##
+##########################################################
+
+########################
+# modified data series
+## Calculate the year fraction
+SBSN_series_nontrad$TTM <- round(as.numeric(difftime(SBSN_series_nontrad$Maturity, current_date, units = "days")) / 365, 2) # add 1 column - TTM
+SBSN_series_nontrad$tenor <- ifelse(SBSN_series_nontrad$TTM <= 1, "A",
+                  ifelse(SBSN_series_nontrad$TTM <= 2, "B",
+                    ifelse(SBSN_series_nontrad$TTM <= 5, "C",
+                      ifelse(SBSN_series_nontrad$TTM <= 10, "D", "E")
+                    )
+                  )
+                ) ## put additional column for tenor group
+
+#######################################################################
+# combine --> data grup seri based on tenor ke data posisi_SBSN_perseri
+## sesuaikan format DB_series
+DB_series_tenor_nontrad<-SBSN_series_nontrad[,c("Seri","tenor")] # create a new dataframe tuk dijadikan data merge, ngambil dari data SBSN series (tradable dan SBSN) --> udah di define di awal
+DB_series_tenor_nontrad <- DB_series_tenor_nontrad[complete.cases(DB_series_tenor_nontrad), ] # exclude NA values
+DB_series_tenor_nontrad<-t(DB_series_tenor_nontrad) # transpose data DB_series_tenor biar bisa di gabung ke data posisi SBSN per seri
+colnames(DB_series_tenor_nontrad) <- as.character(DB_series_tenor_nontrad[1,]) #Set the first row values as column names
+DB_series_tenor_nontrad <- as.data.frame(DB_series_tenor_nontrad) # jadiin formatnya ke data frame
+DB_series_tenor_nontrad <- DB_series_tenor_nontrad[-1,] # Remove the first row
+DB_series_tenor_nontrad <- rownames_to_column(DB_series_tenor_nontrad, var = "Institusi") # add rownames as a column --> nama kolomnya disamain dengan posisi SBSN per seri krn mau di merge walaupun isinya g sama
+
+merged_tenor_posisi_nontrad <- merge(posisi_SBSN_nontrad, DB_series_tenor_nontrad, by.y = intersect(colnames(posisi_SBSN_nontrad), colnames(DB_series_tenor_nontrad)), all = TRUE) #gabung antara file posisi SBSN dengan DB_series tenor group
+merged_tenor_posisi_nontrad[is.na(merged_tenor_posisi_nontrad)] <- 0 #change NA values become 0
+#write.csv(merged_tenor_posisi,"merged_tenor.csv")
+
+##################################
+# nyari jumlah tiap kategori tenor
+
+### set the values in the first column as row names
+rownames(merged_tenor_posisi_nontrad) <- merged_tenor_posisi_nontrad[,1]
+
+## masing2 kita bikin data frame nya
+col_A_nontrad <- grepl("A", merged_tenor_posisi_nontrad["tenor",]) # Find the column indices that contain "A" in the "tenor" row
+subset_A_nontrad <- merged_tenor_posisi_nontrad[, col_A_nontrad, drop = FALSE] # Subset the data frame using the selected column indices
+col_B_nontrad <- grepl("B", merged_tenor_posisi_nontrad["tenor",]) # Find the column indices that contain "B" in the "tenor" row
+subset_B_nontrad <- merged_tenor_posisi_nontrad[, col_B_nontrad, drop = FALSE] # Subset the data frame using the selected column indices
+col_C_nontrad <- grepl("C", merged_tenor_posisi_nontrad["tenor",]) # Find the column indices that contain "C" in the "tenor" row
+subset_C_nontrad <- merged_tenor_posisi_nontrad[, col_C_nontrad, drop = FALSE] # Subset the data frame using the selected column indices
+col_D_nontrad <- grepl("D", merged_tenor_posisi_nontrad["tenor",]) # Find the column indices that contain "D" in the "tenor" row
+subset_D_nontrad <- merged_tenor_posisi_nontrad[, col_D_nontrad, drop = FALSE] # Subset the data frame using the selected column indices
+col_E_nontrad <- grepl("E", merged_tenor_posisi_nontrad["tenor",]) # Find the column indices that contain "E" in the "tenor" row
+subset_E_nontrad <- merged_tenor_posisi_nontrad[, col_E_nontrad, drop = FALSE] # Subset the data frame using the selected column indices, penambahan drop=FALSE tuk subset E karena kasus ini hanya menghasilkan 1 kolom yg klo tidak ditambahi drop=FALSE akan berubah tidak menjadi dataframe, jadi tuk mempertahankan output tetap dalam dataframe, perlu ditambahi drop=FALSE
+
+################################################
+# tuk nambah 1 kolom terakhir -> total tiap row
+## nanti lanjutkan dengan exclude row tenor
+
+subset_A_clean_nontrad<-subset_A_nontrad[-which(row.names(subset_A_nontrad)=="tenor"),, drop = FALSE]
+subset_A_clean_nontrad[,] <- sapply(subset_A_clean_nontrad[,], function(x) as.numeric(as.character(x),na.rm=TRUE)) #Convert character all columns back to numeric
+subset_A_clean_nontrad <- subset_A_clean_nontrad %>% 
+  mutate("0-1 tahun" = rowSums(select(., everything()),na.rm=TRUE)) # milih semua kolom
+subset_A_clean_nontrad<-subset_A_clean_nontrad %>% select(last_col()) # select last column and drop the other columns
+
+subset_B_clean_nontrad<-subset_B_nontrad[-which(row.names(subset_B_nontrad)=="tenor"),, drop = FALSE]
+subset_B_clean_nontrad[,] <- sapply(subset_B_clean_nontrad[,], function(x) as.numeric(as.character(x),na.rm=TRUE)) #Convert character all columns back to numeric
+subset_B_clean_nontrad <- subset_B_clean_nontrad %>% 
+  mutate(">1-2 tahun" = rowSums(select(., everything()),na.rm=TRUE)) # milih semua kolom 
+subset_B_clean_nontrad<-subset_B_clean_nontrad %>% select(last_col()) # select last column and drop the other columns
+
+subset_C_clean_nontrad<-subset_C_nontrad[-which(row.names(subset_C_nontrad)=="tenor"),, drop = FALSE]
+subset_C_clean_nontrad[,] <- sapply(subset_C_clean_nontrad[,], function(x) as.numeric(as.character(x),na.rm=TRUE)) #Convert character all columns back to numeric
+subset_C_clean_nontrad <- subset_C_clean_nontrad %>% 
+  mutate(">2-5 tahun" = rowSums(select(., everything()),na.rm=TRUE)) # milih semua kolom
+subset_C_clean_nontrad<-subset_C_clean_nontrad %>% select(last_col()) # select last column and drop the other columns
+
+subset_D_clean_nontrad<-subset_D_nontrad[-which(row.names(subset_D_nontrad)=="tenor"),, drop = FALSE]
+subset_D_clean_nontrad[,] <- sapply(subset_D_clean_nontrad[,], function(x) as.numeric(as.character(x),na.rm=TRUE)) #Convert character all columns back to numeric
+subset_D_clean_nontrad <- subset_D_clean_nontrad %>% 
+  mutate(">5-10 tahun" = rowSums(select(., everything()),na.rm=TRUE)) # milih semua kolom
+subset_D_clean_nontrad<-subset_D_clean_nontrad %>% select(last_col()) # select last column and drop the other columns
+
+subset_E_clean_nontrad<-subset_E_nontrad[-which(row.names(subset_E_nontrad)=="tenor"),, drop = FALSE]
+subset_E_clean_nontrad[,] <- sapply(subset_E_clean_nontrad[,], function(x) as.numeric(as.character(x),na.rm=TRUE)) #Convert character all columns back to numeric
+subset_E_clean_nontrad <- subset_E_clean_nontrad %>% 
+  mutate(">10 tahun" = rowSums(select(., everything()),na.rm=TRUE)) # milih semua kolom
+subset_E_clean_nontrad<-subset_E_clean_nontrad %>% select(last_col()) # select last column and drop the other columns
+
+## gabung semua subset files
+SBSN_group_tenor_nontrad <- cbind(subset_A_clean_nontrad, subset_B_clean_nontrad, subset_C_clean_nontrad, subset_D_clean_nontrad, subset_E_clean_nontrad)
+SBSN_group_tenor_nontrad <- SBSN_group_tenor_nontrad %>%
+  mutate_all(~./1000000000) # jadikan dalam bentuk miliar rupiah
+
+row_names_order_nontrad <- c("Institusi Pemerintah", "PERORANGAN","Lain-lain") #urutin sesuai dengan kehendak kita
+SBSN_group_tenor_nontrad <- SBSN_group_tenor_nontrad[row_names_order_nontrad,]# reorder rows based on row names order
+SBSN_group_tenor_nontrad <- rownames_to_column(SBSN_group_tenor_nontrad, var = "Institusi") # Add row names as a new column
+
+SBSN_group_tenor_nontrad <- SBSN_group_tenor_nontrad %>% 
+  mutate(total = rowSums(select(., -Institusi),na.rm=TRUE)) # tuk nambah 1 kolom terakhir -> total tiap row
+
+##################################################################################
+#output5 - posisi per kelompok tenor (dalam miliar Rupiah)
+write.xlsx(SBSN_group_tenor_nontrad, paste0("05. Own_group_tenor_nontrad_",current_date,".xlsx"))
+##################################################################################
+
+# comparing with prev. nominal - tuk kontrol apakah pengolahan per kelompok tenornya benar
+last_value_nontrad<-tail(last_nom[["last_nonTrad"]],n=1) #take last nominal yg tradable tuk pembanding
+curr_value_tenor_nontrad<-sum(SBSN_group_tenor_nontrad$total) #take current value yg diolah saat ini
+control_tenor_nontrad <- round(curr_value_nontrad - curr_value_tenor_nontrad, 9)#cari selisih dengan data kemarin-rounding hingga 9 desimal di belakang koma (miliar)
+print(control_tenor_nontrad) #normalnya tdk ada selisih (value:0), tp klo ada selisih cari tau apakah ada yg jatuh tempo atau setelmen penerbitan seri baru 
+
+
+```
